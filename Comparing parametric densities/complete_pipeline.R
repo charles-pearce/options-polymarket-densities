@@ -1,0 +1,289 @@
+# calibration_coeff must be of form c(dte1, dte2, dte3, dte4)
+get_results = function(data_loc, method, calibration_coeff = c(1,1,1,1), 
+                       nclusters = 2, progress = TRUE){
+  require(doParallel)
+  require(foreach)
+  require(purrr)
+  require(dplyr)
+  require(doSNOW)
+  
+  cl <- makeCluster(nclusters)
+
+  # only iterate over pm files
+  files = list.files(data_loc, pattern = "_td\\.csv$", 
+                                     full.names = FALSE, recursive = TRUE)
+  
+  # registerDoParallel(cl)
+  on.exit(stopCluster(cl))
+  
+
+  # add progress bar
+  registerDoSNOW(cl)
+  pb <- txtProgressBar(max = length(files), style = 3)
+  progress <- function(n) setTxtProgressBar(pb, n)
+  opts <- list(progress = progress)
+
+  clusterEvalQ(cl, {
+    source("comparing\\Comparing densities.R")
+    source("comparing\\comparing probabilities.R")
+    source("Options\\am_density.R")
+    source("PM\\am pm density.R")
+    library(dplyr)
+  })
+  
+  result = foreach(name = files,
+                   .export = c("combined_results", "get_comparison_density",
+                               "get_both_probabilities"),
+                    .options.snow = opts) %dopar%
+            combined_results(name, data_loc, method, calibration_coeff)
+  close(pb)
+  density_df = bind_rows(map(result, "density"))
+  rownames(density_df) = NULL
+  probability_df = bind_rows(map(result, "probability"))
+  skipped = bind_rows(map(result, "skipped"))
+
+  return(list("density_comparison" = density_df,
+              "probabilities" = probability_df,
+              "skipped" = skipped))
+}
+
+# get the results (density and probability comparisons) for a specific 
+# option file name, for dte 1:4
+# 
+combined_results = function(name, data_loc, method, calibration_coeff){
+  # get corresponding pm file name
+  split = unlist(strsplit(name, "_"))
+  file_name = paste(head(split, length(split) - 1), collapse = "_")
+  stock = unlist(strsplit(name, "/"))[1]
+  date = regmatches(name, regexpr("\\d{4}-\\d{2}-\\d{2}", name))
+  
+  option_data = read.csv(paste0(data_loc, "\\",file_name,"_td.csv"))
+  pm_data = read.csv(paste0(data_loc, "\\", file_name, "_pm.csv"))
+  
+  max_bracket = max(unlist(sapply(
+      (strsplit(gsub( "<|>", "",pm_data$bracket), "-")),
+      function(x) as.numeric(x)
+    )))
+
+  density = list()
+  probability = list()
+  skipped_list = list()
+  
+  for(dte in setdiff(unique(option_data$DTE), 0)){
+    sum_prices = sum(filter(pm_data, DTE == dte)$price_yes)
+    # if the sum of all yes prices is above 2, skip this dte as the prices
+    # are not reliable/informative
+    if (sum_prices > 2){
+      skipped_list[[length(skipped_list)+1]] = data.frame(
+        "stock" = stock, 
+        "date" = date, 
+        "dte" = dte, 
+        "reason" = "sum price > 2"
+        )
+      next
+    }
+    
+    # calibrate and/or normalize the prices
+    if(calibration_coeff[dte] == 1){
+      this_pm_data = filter(pm_data, DTE == dte)|>
+        mutate(probs = price_yes / sum_prices)
+    } else {
+      b = calibration_coeff[dte]
+      this_pm_data = pm_data |>
+        filter(DTE == dte) |>
+        mutate(probs = 
+                 (price_yes / sum_prices)^b / (
+                   (price_yes / sum_prices)^b + 
+                 (1- (price_yes / sum_prices))^b
+                 )
+               )
+      this_pm_data = this_pm_data |>
+        mutate(probs = probs/sum(probs))
+    }
+    
+    attempt_pm = try({
+      pm_density = fit_pm_density(method = method, 
+                             data = this_pm_data)
+    }, silent = FALSE)
+    
+    # If an error happened, 'attempt' will be of class "try-error"
+    if (inherits(attempt_pm, "try-error")) {
+      skipped_list[[length(skipped_list)+1]] = data.frame(
+        "stock" = stock, 
+        "date" = date, 
+        "dte" = dte,
+        "reason" = "pm density not found"
+        )
+      
+      next
+    }
+    
+    attempt_option = try({
+      option_density = get_option_density(data = option_data,
+                                          dte = dte,
+                                          method = method)
+    }, silent = TRUE)
+    
+    # If an error happened, 'attempt' will be of class "try-error"
+    if (inherits(attempt_option, "try-error")) {
+      skipped_list[[length(skipped_list)+1]] = data.frame(
+        "stock" = stock, 
+        "date" = date, 
+        "dte" = dte,
+        "reason" = "option density not found" 
+        )
+      
+      next
+    }
+      
+    
+    density[[dte]] = get_comparison_density(option_density = option_density, 
+                                               pm_density = pm_density, 
+                                               dte = dte,
+                                               max_bracket = max_bracket,
+                                               date = date, 
+                                               stock = stock, 
+                                               method = method)
+    probability[[dte]] = get_both_probabilities(option_fit = option_density, 
+                                           this_pm_data = this_pm_data,
+                                           dte = dte,
+                                           stock = stock,
+                                           date = date,
+                                           method = method)
+  }
+  
+  return(list(density = do.call(rbind, density),
+              probability = do.call(rbind, probability),
+              skipped = bind_rows(skipped_list)))
+}
+###########################################
+get_comparison_density = function(option_density, pm_density, dte, 
+                                  max_bracket, date, stock, method, dx = 0.5, 
+                                  ci = TRUE){
+
+  # max_bracket = max(unlist(sapply(
+  #   (strsplit(gsub( "<|>", "",pm_data$bracket), "-")),
+  #   function(x) as.numeric(x)
+  # )))
+  
+  x_new = seq(0, max_bracket*2, by = dx)
+  y_options = mixture_density_options(x = x_new,
+                                      density_obj = option_density,
+                                      method = method)
+  
+  y_pm = mixture_density_pm(x = x_new, 
+                            params = pm_density, 
+                            method = method)
+  
+  wasserstein = get_wasserstein_dist(y_options = y_options,
+                                     y_pm = y_pm)
+  hellinger = get_hellinger_distance(y_options = y_options,
+                                     y_pm = y_pm,
+                                     dx = dx)
+  ks = ks_test(y_options = y_options,
+               x_new = x_new,
+               pm_fit = pm_density,
+               dx = dx,
+               method = method)
+  
+  moments = get_moments(method = method, 
+                        option_density = option_density,
+                        pm_density = pm_density,
+                        ci = ci,
+                        y_options = y_options,
+                        x_new = x_new,
+                        dx = dx)
+  if(ci){
+    results = data.frame("Stock" = stock, 
+                         "Date" = date,
+                         "DTE" = dte,
+                         "Wasserstein Distance" = wasserstein,
+                         "Hellinger Distance" = hellinger,
+                         "KS statistic" = ks$ks_statistic,
+                         "KS p-value" = ks$p_val,
+                         "pm_mean" = moments$pm_mean,
+                         "option_mean" = moments$option_mean,
+                         "pm_ci_lower" = moments$pm_ci_lower,
+                         "pm_ci_upper" = moments$pm_ci_upper,
+                         "option_ci_lower" = moments$option_ci_lower,
+                         "option_ci_upper" = moments$option_ci_upper,
+                         "pm_sd" = moments$pm_sd,
+                         "option_sd" = moments$option_sd
+                         )
+    
+  } else{
+    results = data.frame("Stock" = stock, 
+                         "Date" = date,
+                         "DTE" = dte,
+                         "Wasserstein Distance" = wasserstein,
+                         "Hellinger Distance" = hellinger,
+                         "KS statistic" = ks$ks_statistic,
+                         "KS p-value" = ks$p_val,
+                         "pm_mean" = moments$pm_mean,
+                         "option_mean" = moments$option_mean,
+                         "pm_sd" = moments$pm_sd,
+                         "option_sd" = moments$option_sd
+    )
+  }
+  return(results)
+}
+##################################################3
+
+get_both_probabilities = function(option_fit, this_pm_data, dte, stock, date, method){
+  
+  brackets = sapply((strsplit(gsub( "<|>", "",this_pm_data$bracket), "-")),
+                    function(x) as.numeric(x))
+  
+  # make sure the lower an upper brackets are are fitting
+  # don't use Inf or 0 to save time when estimating integral, instead
+  # find bounds such that the missing probability is < 0.00001
+  brackets = sapply(1:length(brackets), function(i) {
+    a = brackets[[i]]
+    if(length(a) == 1){
+      if(a[1] == min(unlist(brackets))){
+        b = a[1] /1.05
+        while(extract_option_prob(c(0, b), option_fit, method = method)> 0.00001){
+          b = b / 1.05
+        }
+        c(b, a[1])
+      } else if(a[1] == max(unlist(brackets))){
+        iter = 0
+        b = a[1] *1.05
+        while(extract_option_prob(c(0,b), option_fit, method = method)< 0.99999){
+          b = b * 1.05
+        }
+        c(a[1], b)
+      } else {
+        stop("Error: a bracket not at the tails only has only one value")
+      } 
+    } else {
+      a
+    }
+  }, simplify = FALSE)
+  
+  list_output = list()
+  for(i in 1:length(brackets)){
+    bracket = brackets[[i]]
+    pm_prob = this_pm_data$probs[i]
+    option_prob = extract_option_prob(bracket, option_fit, method = method)
+    
+    temp = c(bracket_lower = bracket[1], bracket_upper = bracket[2],
+             pm_probability = pm_prob, option_probability = option_prob)
+    
+    list_output[[i]] = temp
+  }
+  output = do.call(rbind, list_output)
+  rownames(output) = NULL
+  output = as.data.frame(output)
+  output$stock = rep(stock, nrow(output))
+  output$Date = rep(date, nrow(output))
+  output$DTE = rep(dte, length(brackets))
+  output$outcome = this_pm_data$outcome_yes
+  # sort the brackets from lowest to highes and number them
+  output = arrange(output, bracket_lower)
+  output$bracket_nmbr = 1:length(brackets)
+  
+  return(output)
+}
+
+
