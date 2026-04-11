@@ -2,10 +2,11 @@ source("comparing\\complete_pipeline.R")
 source("comparing\\comparing probabilities.R")
 library(tidyverse)
 
+method = "1lognorm"
 data_loc = "C:\\Users\\lars\\OneDrive\\Dokumente\\Uni\\Seminar Forecasting\\data collection\\Getting poly data\\data"
 results = get_results(data_loc = data_loc,
                       nclusters = 8, 
-                      method = "1lognorm", 
+                      method = method, 
                       calibration_coeff = c(1,1,1,1))
 density_result = results$density_comparison
 probabilities = results$probabilities
@@ -41,15 +42,16 @@ mz_result_by_DTE_stock = probabilities |>
 
 mz_result = rbind(mz_results_by_DTE, mz_result_by_DTE_stock)
 
-write.csv(density_result, "density_result_ci.csv", row.names = FALSE)
-write.csv(accuracy_result, "accuracy_result_ci.csv", row.names = FALSE)
-write.csv(mz_result, "mz_result_ci.csv", row.names = FALSE)
-write.csv(skipped, "skipped_dates_ci.csv", row.names = FALSE)
+write.csv(density_result, paste0("results\\", method, "density_result.csv"), row.names = FALSE)
+write.csv(accuracy_result,  paste0("results\\", method, "accuracy_result.csv"), row.names = FALSE)
+write.csv(mz_result,  paste0("results\\", method, "mz_result.csv"), row.names = FALSE)
+write.csv(skipped,  paste0("results\\", method, "skipped_dates.csv"), row.names = FALSE)
 
 
 library(profvis)
 
 profvis({combined_results(files[1], data_loc)})
 
-combined_results(files[103], data_loc, method = "1lognorm",
-                 calibration_coeff = c(1,1,1,1))
+combined_results(files[1], data_loc, method = "nonparam",
+                 calibration_coeff = list("COMBINED" = c(1,1,1,1)))
+

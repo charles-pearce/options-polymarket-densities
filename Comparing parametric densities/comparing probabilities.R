@@ -24,6 +24,9 @@ extract_option_prob = function(bracket, density_obj, method){
   } else if(method == "1lognorm"){
     prob_lower = plnorm(bracket[1], density_obj$mu, density_obj$zeta)
     prob_upper = plnorm(bracket[2], density_obj$mu, density_obj$zeta)
+  } else if(method == "nonparam"){
+    prob_lower = density_obj$cdf(bracket[1])
+    prob_upper = density_obj$cdf(bracket[2])
   }
     
   return(prob_upper - prob_lower)

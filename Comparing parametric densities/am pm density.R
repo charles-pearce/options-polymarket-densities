@@ -42,7 +42,7 @@ objective = function(params, brackets, probs, method){
   return(ob)
 }
 
-fit_pm_density = function(method, data, educated_guess = NULL){
+fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, dx = NULL){
   require(stats)
 
   brackets = sapply((strsplit(gsub( "<|>", "",data$bracket), "-")), function(x) as.numeric(x))
@@ -63,6 +63,17 @@ fit_pm_density = function(method, data, educated_guess = NULL){
                 a
               }
             }, simplify = FALSE)
+  
+  # ensure probs and brackets are sorted
+  corr_order = order(sapply(brackets, FUN = min))
+  brackets = brackets[corr_order]
+  probs = probs[corr_order]
+  
+  if(method == "nonparam"){
+    brackets[[1]][1] = x_range[1]
+    brackets[[length(brackets)]][2] = x_range[2]
+    return(non_param_approx(brackets = brackets, probs = probs, x_range = x_range, dx = dx))
+  }
   
   # get starting values. start with equal weights and estimate mu and sigma
   # but then give one higher mu and sd and one lower

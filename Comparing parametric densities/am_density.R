@@ -2,17 +2,23 @@
 # a = get_am_density(data, dte = 4)
 # plot_am_density(a, x_min = 100, x_max = 300)
 
-get_option_density = function(data, dte, method){
+get_option_density = function(data, dte, method, dx){
   require(RND)
   require(dplyr)
   data = data |>
     filter(DTE == dte)
+  
+  if(method == "nonparam"){
+    fit = extract_shimko(data, dx = dx)
+  }
   
   calls = arrange(filter(data, OptionType == "call"), Strike)
   puts = arrange(filter(data, OptionType == "put"), Strike)
   r = unique(data$Rate)
   te = unique(data$Tau)
   s0 = unique(data$SpotClose)
+  
+
   
   if(method == "3lognorm"){
     fit = extract.am.density(r = r, 

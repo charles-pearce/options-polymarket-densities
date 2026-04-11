@@ -1,5 +1,7 @@
-# calibration_coeff must be of form c(dte1, dte2, dte3, dte4)
-get_results = function(data_loc, method, calibration_coeff = c(1,1,1,1), 
+# calibration_coeff must be of form 
+# list("COMBINED = c(dte1, dte2, dte3, dte4), "AAPL" = c(dte1, dte2,...), ...)
+ 
+get_results = function(data_loc, method, calibration_coeff = list("COMBINED" =c(1,1,1,1)), 
                        nclusters = 2, progress = TRUE){
   require(doParallel)
   require(foreach)
@@ -28,6 +30,8 @@ get_results = function(data_loc, method, calibration_coeff = c(1,1,1,1),
     source("comparing\\comparing probabilities.R")
     source("Options\\am_density.R")
     source("PM\\am pm density.R")
+    source("Non_parametric\non-parametric-approach-t-asymptotes.R")
+    source("Non_parametric\shimko-density")
     library(dplyr)
   })
   
@@ -50,7 +54,7 @@ get_results = function(data_loc, method, calibration_coeff = c(1,1,1,1),
 # get the results (density and probability comparisons) for a specific 
 # option file name, for dte 1:4
 # 
-combined_results = function(name, data_loc, method, calibration_coeff){
+combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1){
   # get corresponding pm file name
   split = unlist(strsplit(name, "_"))
   file_name = paste(head(split, length(split) - 1), collapse = "_")
@@ -69,111 +73,142 @@ combined_results = function(name, data_loc, method, calibration_coeff){
   probability = list()
   skipped_list = list()
   
-  for(dte in setdiff(unique(option_data$DTE), 0)){
-    sum_prices = sum(filter(pm_data, DTE == dte)$price_yes)
-    # if the sum of all yes prices is above 2, skip this dte as the prices
-    # are not reliable/informative
-    if (sum_prices > 2){
-      skipped_list[[length(skipped_list)+1]] = data.frame(
-        "stock" = stock, 
-        "date" = date, 
-        "dte" = dte, 
-        "reason" = "sum price > 2"
-        )
-      next
-    }
+  # loop over the combined and the stock specific calibration coefficients and dte
+  wanted = c("COMBINED", stock)
+  this_coeff = calibration_coeff[intersect(wanted, names(calibration_coeff))]
+  
+  for(cal_name in names(this_coeff)){
     
-    # calibrate and/or normalize the prices
-    if(calibration_coeff[dte] == 1){
-      this_pm_data = filter(pm_data, DTE == dte)|>
-        mutate(probs = price_yes / sum_prices)
-    } else {
-      b = calibration_coeff[dte]
-      this_pm_data = pm_data |>
-        filter(DTE == dte) |>
-        mutate(probs = 
-                 (price_yes / sum_prices)^b / (
-                   (price_yes / sum_prices)^b + 
-                 (1- (price_yes / sum_prices))^b
+    density[[cal_name]]     = list()
+    probability[[cal_name]] = list()
+    
+    for(dte in setdiff(unique(option_data$DTE), 0)){
+      
+      sum_prices = sum(filter(pm_data, DTE == dte)$price_yes)
+      # if the sum of all yes prices is above 2, skip this dte as the prices
+      # are not reliable/informative
+      if (sum_prices > 2){
+        skipped_list[[length(skipped_list)+1]] = data.frame(
+          "stock" = stock, 
+          "date" = date, 
+          "dte" = dte, 
+          "calibration_level" = cal_name,
+          "reason" = "sum price > 2"
+          )
+        next
+      }
+      
+      # calibrate and/or normalize the prices
+      cal = calibration_coeff[[cal_name]]
+      if(cal[dte] == 1){
+        this_pm_data = filter(pm_data, DTE == dte)|>
+          mutate(probs = price_yes / sum_prices)
+      } else {
+        b = cal[dte]
+        this_pm_data = pm_data |>
+          filter(DTE == dte) |>
+          mutate(probs = 
+                   (price_yes / sum_prices)^b / (
+                     (price_yes / sum_prices)^b + 
+                   (1- (price_yes / sum_prices))^b
+                   )
                  )
-               )
-      this_pm_data = this_pm_data |>
-        mutate(probs = probs/sum(probs))
-    }
-    
-    attempt_pm = try({
-      pm_density = fit_pm_density(method = method, 
-                             data = this_pm_data)
-    }, silent = FALSE)
-    
-    # If an error happened, 'attempt' will be of class "try-error"
-    if (inherits(attempt_pm, "try-error")) {
-      skipped_list[[length(skipped_list)+1]] = data.frame(
-        "stock" = stock, 
-        "date" = date, 
-        "dte" = dte,
-        "reason" = "pm density not found"
+        this_pm_data = this_pm_data |>
+          mutate(probs = probs/sum(probs))
+      }
+      
+      attempt_option = try({
+        option_density = get_option_density(data = option_data,
+                                            dte = dte,
+                                            method = method,
+                                            dx = dx)
+      }, silent = TRUE)
+      
+      # If an error happened, 'attempt' will be of class "try-error"
+      if (inherits(attempt_option, "try-error")) {
+        skipped_list[[length(skipped_list)+1]] = data.frame(
+          "stock" = stock, 
+          "date" = date, 
+          "dte" = dte,
+          "calibration_level" = cal_name,
+          "reason" = "option density not found" 
         )
+        
+        next
+      }
+  
+      attempt_pm = try({
+        x_range = if (method == "nonparam") range(option_density$rnd_K) else NULL
+        pm_density = fit_pm_density(method = method, 
+                               data = this_pm_data,
+                               x_range = x_range,
+                               dx = dx)
+      }, silent = FALSE)
       
-      next
+      # If an error happened, 'attempt' will be of class "try-error"
+      if (inherits(attempt_pm, "try-error")) {
+        skipped_list[[length(skipped_list)+1]] = data.frame(
+          "stock" = stock, 
+          "date" = date, 
+          "dte" = dte,
+          "calibration_level" = cal_name,
+          "reason" = "pm density not found"
+          )
+        
+        next
+      }
+        
+      
+      density[[cal_name]][[dte]] = get_comparison_density(option_density = option_density, 
+                                                 pm_density = pm_density, 
+                                                 dte = dte,
+                                                 max_bracket = max_bracket,
+                                                 date = date, 
+                                                 stock = stock, 
+                                                 method = method
+                                                 )
+      density[[cal_name]][[dte]][["calibration_method"]] = cal_name
+      
+      probability[[cal_name]][[dte]] = get_both_probabilities(option_fit = option_density, 
+                                             this_pm_data = this_pm_data,
+                                             dte = dte,
+                                             stock = stock,
+                                             date = date,
+                                             method = method
+                                             )
+      probability[[cal_name]][[dte]][["calibration_method"]] = cal_name
     }
-    
-    attempt_option = try({
-      option_density = get_option_density(data = option_data,
-                                          dte = dte,
-                                          method = method)
-    }, silent = TRUE)
-    
-    # If an error happened, 'attempt' will be of class "try-error"
-    if (inherits(attempt_option, "try-error")) {
-      skipped_list[[length(skipped_list)+1]] = data.frame(
-        "stock" = stock, 
-        "date" = date, 
-        "dte" = dte,
-        "reason" = "option density not found" 
-        )
-      
-      next
-    }
-      
-    
-    density[[dte]] = get_comparison_density(option_density = option_density, 
-                                               pm_density = pm_density, 
-                                               dte = dte,
-                                               max_bracket = max_bracket,
-                                               date = date, 
-                                               stock = stock, 
-                                               method = method)
-    probability[[dte]] = get_both_probabilities(option_fit = option_density, 
-                                           this_pm_data = this_pm_data,
-                                           dte = dte,
-                                           stock = stock,
-                                           date = date,
-                                           method = method)
   }
   
-  return(list(density = do.call(rbind, density),
-              probability = do.call(rbind, probability),
+  # have to call rbind twice as we now have a nested list 
+  return(list(density = do.call(rbind, lapply(density, function(x) do.call(rbind, x))),
+              probability = do.call(rbind, lapply(probability, function(x) do.call(rbind, x))),
               skipped = bind_rows(skipped_list)))
 }
 ###########################################
 get_comparison_density = function(option_density, pm_density, dte, 
-                                  max_bracket, date, stock, method, dx = 0.5, 
-                                  ci = TRUE){
+                                  max_bracket, date, stock, method, dx = 0.1){
 
   # max_bracket = max(unlist(sapply(
   #   (strsplit(gsub( "<|>", "",pm_data$bracket), "-")),
   #   function(x) as.numeric(x)
   # )))
   
-  x_new = seq(0, max_bracket*2, by = dx)
-  y_options = mixture_density_options(x = x_new,
-                                      density_obj = option_density,
-                                      method = method)
-  
-  y_pm = mixture_density_pm(x = x_new, 
-                            params = pm_density, 
-                            method = method)
+  if(method == "nonparam"){
+    x_new = option_density$rnd_K
+    y_options = option_density$rnd
+    y_pm = pm_density$data$y
+     
+  } else {
+    x_new = seq(0, max_bracket*2, by = dx)
+    y_options = mixture_density_options(x = x_new,
+                                        density_obj = option_density,
+                                        method = method)
+    
+    y_pm = mixture_density_pm(x = x_new, 
+                              params = pm_density, 
+                              method = method)
+  }
   
   wasserstein = get_wasserstein_dist(y_options = y_options,
                                      y_pm = y_pm)
@@ -193,38 +228,30 @@ get_comparison_density = function(option_density, pm_density, dte,
                         y_options = y_options,
                         x_new = x_new,
                         dx = dx)
-  if(ci){
-    results = data.frame("Stock" = stock, 
-                         "Date" = date,
-                         "DTE" = dte,
-                         "Wasserstein Distance" = wasserstein,
-                         "Hellinger Distance" = hellinger,
-                         "KS statistic" = ks$ks_statistic,
-                         "KS p-value" = ks$p_val,
-                         "pm_mean" = moments$pm_mean,
-                         "option_mean" = moments$option_mean,
-                         "pm_ci_lower" = moments$pm_ci_lower,
-                         "pm_ci_upper" = moments$pm_ci_upper,
-                         "option_ci_lower" = moments$option_ci_lower,
-                         "option_ci_upper" = moments$option_ci_upper,
-                         "pm_sd" = moments$pm_sd,
-                         "option_sd" = moments$option_sd
-                         )
+  
+
     
-  } else{
-    results = data.frame("Stock" = stock, 
-                         "Date" = date,
-                         "DTE" = dte,
-                         "Wasserstein Distance" = wasserstein,
-                         "Hellinger Distance" = hellinger,
-                         "KS statistic" = ks$ks_statistic,
-                         "KS p-value" = ks$p_val,
-                         "pm_mean" = moments$pm_mean,
-                         "option_mean" = moments$option_mean,
-                         "pm_sd" = moments$pm_sd,
-                         "option_sd" = moments$option_sd
-    )
-  }
+  results = data.frame("Stock" = stock, 
+                        "Date" = date,
+                        "DTE" = dte,
+                       "method" = method,
+                       "Wasserstein Distance" = wasserstein,
+                        "Hellinger Distance" = hellinger,
+                        "KS statistic" = ks$ks_statistic,
+                        "KS p-value" = ks$p_val,
+                       "mean" = moments$mean,
+                       "mean_halfwidth" = moments$mean_halfwidth,
+                       "median" = moments$median,
+                       "median_halfwidth" = moments$median_halfwidth,
+                       "variance" = moments$variance,
+                       "variance_halfwidth" = moments$variance_halfwidth,
+                       "skewness" = moments$skewness,
+                       "skewness_halfwidth" = moments$skewness_halfwidth,
+                       "kurtosis" = moments$kurtosis,
+                       "kurtosis_halfwidth" = moments$kurtosis_halfwidth
+  )
+    
+  
   return(results)
 }
 ##################################################3
@@ -279,9 +306,10 @@ get_both_probabilities = function(option_fit, this_pm_data, dte, stock, date, me
   output$Date = rep(date, nrow(output))
   output$DTE = rep(dte, length(brackets))
   output$outcome = this_pm_data$outcome_yes
-  # sort the brackets from lowest to highes and number them
+  # sort the brackets from lowest to highest and number them
   output = arrange(output, bracket_lower)
   output$bracket_nmbr = 1:length(brackets)
+  output$method = method
   
   return(output)
 }
