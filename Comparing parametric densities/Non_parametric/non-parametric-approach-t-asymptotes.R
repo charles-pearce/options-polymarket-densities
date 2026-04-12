@@ -26,9 +26,6 @@ non_param_approx = function(brackets, probs, dx = 0.1, x_range = NULL){
   bracket_size = knot_x[2]
   knot_x[length(knot_x)] = knot_x[length(knot_x)] + 5
   
-  # Fit spline only to the real data
-  fit_cdf = smooth.spline(knot_x, cum_probs, df = 8)
-  
   # if no x range is given determine it by looking at the brackets
   if (is.null(x_range)){
     x_min = range(brackets)[1] * 0.8
@@ -39,11 +36,19 @@ non_param_approx = function(brackets, probs, dx = 0.1, x_range = NULL){
   }
   x_new = seq(x_min, x_max, by = dx)
   
+  valid = FALSE
+  df = 7
+  
+  # while(!valid & df > 1){
+  # Fit spline only to the real data
+  fit_cdf = smooth.spline(knot_x, cum_probs, df = df)
   
   # Boundary info for tail fitting
+  # reduce df until the results are valid i.e. no negative cdf values
   x_left  = knot_x[2]
   F_left  = predict(fit_cdf, x_left)$y
-  dF_left = predict(fit_cdf, x_left,  deriv = 1)$y      # slope at left knot
+  # ensure that dF_left is positive
+  dF_left = predict(fit_cdf, x_left,  deriv = 1)$y     # slope at left knot
   d2F_left  <- predict(fit_cdf, x_left,  deriv = 2)$y   # curvature
   
   x_right = knot_x[length(knot_x) - 1]
@@ -51,23 +56,42 @@ non_param_approx = function(brackets, probs, dx = 0.1, x_range = NULL){
   dF_right = predict(fit_cdf, x_right, deriv = 1)$y     # slope at right knot
   d2F_right <- predict(fit_cdf, x_right, deriv = 2)$y   # curvature
   
+    # check all conditions for the output to be valid
+    # valid = F_left > 0 & F_left < 1 &
+    #   F_right > 0 & F_right < 1 &
+    #   F_left < F_right &
+    #   dF_left > 0 &
+    #   dF_right > 0 &
+    #   d2F_left > 0 &
+    #   d2F_right < 0
+    # 
+    # df = df-1
+  # }
+    
   # Left tail, t distribution
-  left  = fit_t_tail(F_left,  dF_left,  d2F_left,  x_join = x_left)
+  left  = fit_t_tail(F_join = F_left,  
+                     dF_join = dF_left,
+                     d2F_join =d2F_left,
+                     x_join = x_left)
+  
   left_tail_cdf = function(x) pt((x - left$mu)  / left$sigma,  df = left$nu)
   left_tail_pdf = function(x) dt((x - left$mu)  / left$sigma,  df = left$nu) / left$sigma
   
   # Right tail, t distribution
-  right = fit_t_tail(F_right, dF_right, d2F_right, x_join = x_right)
+  right = fit_t_tail(F_join = F_right,
+                     dF_join = dF_right,
+                     d2F_join = d2F_right,
+                     x_join = x_right)
   right_tail_cdf = function(x) pt((x - right$mu) / right$sigma, df = right$nu)
   right_tail_pdf = function(x) dt((x - right$mu) / right$sigma, df = right$nu) / right$sigma
   
   
   # Assemble CDF and PDF piece-wise and ensure it's always positive
-  cdf_vals = ifelse(
-    x_new < x_left,  left_tail_cdf(x_new),
-    ifelse(x_new > x_right, right_tail_cdf(x_new),
-           predict(fit_cdf, x_new)$y)
-        )
+  # cdf_vals = pmax(0,ifelse(
+  #   x_new < x_left,  left_tail_cdf(x_new),
+  #   ifelse(x_new > x_right, right_tail_cdf(x_new),
+  #          predict(fit_cdf, x_new)$y)
+  #       ))
   
   # ensure pdf values are always >= 0
   pdf_vals = pmax(ifelse(
@@ -77,10 +101,15 @@ non_param_approx = function(brackets, probs, dx = 0.1, x_range = NULL){
   ), 0)
   
   # Force CDF to [0,1] as a safety net (probably overkill)
-  cdf_vals = pmax(0, pmin(1, cdf_vals))
+  # cdf_vals = pmax(0, pmin(1, cdf_vals))
   
   pdf_data = data.frame(x = x_new, y = pdf_vals)
-  cdf_data = data.frame(x = x_new, y = cdf_vals)
+  
+  # if there are NA values in the pdf values throw an error
+  if(any(is.na(pdf_data))){
+    stop("Couldn't fit a proper distribution")
+  }
+  # cdf_data = data.frame(x = x_new, y = cdf_vals)
   
   return(list(data = pdf_data, area = sum(pdf_vals * dx)))
 }

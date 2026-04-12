@@ -146,9 +146,3 @@ extract_shimko <- function(data,
   )
 }
 
-b = filter(data, DTE == 1)
-a = extract_shimko(filter(data, DTE == 1))
-length(a$rnd_K)
-length(a$rnd)
-a$area
-a$dx
