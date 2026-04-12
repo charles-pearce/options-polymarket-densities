@@ -15,31 +15,37 @@ get_results = function(data_loc, method, calibration_coeff = list("COMBINED" =c(
   files = list.files(data_loc, pattern = "_td\\.csv$", 
                                      full.names = FALSE, recursive = TRUE)
   
-  # registerDoParallel(cl)
   on.exit(stopCluster(cl))
   
-
   # add progress bar
   registerDoSNOW(cl)
   pb <- txtProgressBar(max = length(files), style = 3)
   progress <- function(n) setTxtProgressBar(pb, n)
   opts <- list(progress = progress)
-
+  
+  # wd = getwd()
+  # 
+  # clusterExport(cl, c("data_loc", "method", "calibration_coeff", "wd"), envir = environment())
+  
   clusterEvalQ(cl, {
     source("comparing\\Comparing densities.R")
     source("comparing\\comparing probabilities.R")
     source("Options\\am_density.R")
     source("PM\\am pm density.R")
-    source("Non_parametric\non-parametric-approach-t-asymptotes.R")
-    source("Non_parametric\shimko-density")
+    source("Non_parametric\\non-parametric-approach-t-asymptotes.R")
+    source("Non_parametric\\shimko-density.R")
     library(dplyr)
   })
+  
   
   result = foreach(name = files,
                    .export = c("combined_results", "get_comparison_density",
                                "get_both_probabilities"),
                     .options.snow = opts) %dopar%
-            combined_results(name, data_loc, method, calibration_coeff)
+    tryCatch(
+            combined_results(name, data_loc, method, calibration_coeff),
+            error = function(e) list(error = conditionMessage(e), file = name)
+    )
   close(pb)
   density_df = bind_rows(map(result, "density"))
   rownames(density_df) = NULL
@@ -74,7 +80,7 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
   skipped_list = list()
   
   # loop over the combined and the stock specific calibration coefficients and dte
-  wanted = c("COMBINED", stock)
+  wanted = c("COMBINED", "NOT CALIBRATED", stock)
   this_coeff = calibration_coeff[intersect(wanted, names(calibration_coeff))]
   
   for(cal_name in names(this_coeff)){
@@ -99,7 +105,8 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
       }
       
       # calibrate and/or normalize the prices
-      cal = calibration_coeff[[cal_name]]
+      cal = calibration_coeff[[cal_name]][[1]]
+      print(cal[dte])
       if(cal[dte] == 1){
         this_pm_data = filter(pm_data, DTE == dte)|>
           mutate(probs = price_yes / sum_prices)

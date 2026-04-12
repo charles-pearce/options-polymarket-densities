@@ -56,7 +56,7 @@ mixture_density_pm = function(x, params, method) {
 # get an approximation of the hellinger distance, where y_options, y_pm
 # are vectors of density values over a large range of x
 get_hellinger_distance = function(y_options, y_pm, dx){
-  return(sqrt(0.5 * sum((sqrt(y_options)-sqrt(y_pm))^2 * dx)))
+  return(sqrt(0.5 * sum((sqrt(y_options)-sqrt(y_pm))^2 * dx, na.rm = TRUE)))
 }
 
 ks_test = function(y_options, x_new, pm_fit, dx, method, n = 10000){
@@ -236,37 +236,40 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
                        B = 100, y_options = NULL, dx = NULL, x_new = NULL){
   if (method == "3lognorm"){
     mu.1 = pm_density$mu.1
-          mu.2 = pm_density$mu.2
-          mu.3 = pm_density$mu.3
-          sd.1 = pm_density$sd.1
-          sd.2 = pm_density$sd.2
-          sd.3 = pm_density$sd.3
+    mu.2 = pm_density$mu.2
+    mu.3 = pm_density$mu.3
+    sd.1 = pm_density$sd.1
+    sd.2 = pm_density$sd.2
+    sd.3 = pm_density$sd.3
+    w.2 = pm_density$w.2
+    w.3 = pm_density$w.3
+    w.1 = 1 - w.2 - w.3
 
-          # PM CI
-          all_components = matrix(
-            sample(c(1,2,3), size = n*B, replace = TRUE, prob = c(w.1, w.2, w.3)),
-            nrow = n
-          )
-          all_rnd = matrix(0, nrow = n, ncol = B)
-          mask1 = all_components == 1
-          mask2 = all_components == 2
-          mask3 = all_components == 3
-          all_rnd[mask1] = rlnorm(sum(mask1), mu.1, sd.1)
-          all_rnd[mask2] = rlnorm(sum(mask2), mu.2, sd.2)
-          all_rnd[mask3] = rlnorm(sum(mask3), mu.3, sd.3)
-          
-          pm_moments = get_all_moments(all_rnd)
-          
-          
-          
-          cdf = cumsum(y_options) * dx
-          all_unif = runif(n * B)
-          all_rnd_opt = matrix(
-            approx(cdf, x_new, xout = all_unif)$y,
-            nrow = n
-          )
-          
-          option_moments = get_all_moments(all_rnd_opt)
+    # PM CI
+    all_components = matrix(
+      sample(c(1,2,3), size = n*B, replace = TRUE, prob = c(w.1, w.2, w.3)),
+      nrow = n
+    )
+    all_rnd = matrix(0, nrow = n, ncol = B)
+    mask1 = all_components == 1
+    mask2 = all_components == 2
+    mask3 = all_components == 3
+    all_rnd[mask1] = rlnorm(sum(mask1), mu.1, sd.1)
+    all_rnd[mask2] = rlnorm(sum(mask2), mu.2, sd.2)
+    all_rnd[mask3] = rlnorm(sum(mask3), mu.3, sd.3)
+    
+    pm_moments = get_all_moments(all_rnd)
+    
+    
+    
+    cdf = cumsum(y_options) * dx
+    all_unif = runif(n * B)
+    all_rnd_opt = matrix(
+      approx(cdf, x_new, xout = all_unif)$y,
+      nrow = n
+    )
+    
+    option_moments = get_all_moments(all_rnd_opt)
           
   } else if ( method == "1lognorm"){
     all_rnd = matrix(rlnorm(n * B, pm_density$mu, pm_density$sd), nrow = n, ncol = B)
