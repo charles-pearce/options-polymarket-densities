@@ -85,7 +85,7 @@ shimkoCS.extract <- function(data,
                 max(df$sigma_iv, na.rm=TRUE)))
     
     df <- df %>%
-      filter(!is.na(sigma_iv), sigma_iv > 0.1, sigma_iv < 1.5)
+      filter(!is.na(sigma_iv), sigma_iv > 0.1, sigma_iv < 1.5) #IV filter
     
     
     # strike aggregation
