@@ -101,30 +101,69 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
     mu = log(median)
     sd = sqrt(2*max(log(mean) - mu, 1e-3))
     if(method == "3lognorm"){
-      educated_guess = c(0.33, 0.33, mu, mu*0.8, mu*1.2, sd, 0.8*sd, 1.2*sd)
+      # set a threshold for the weights
+      threshold = 1e-5
+      educated_guess = c(0.33, 0.33, mu, mu*0.9, mu*1.1, sd, 0.8*sd, 1.2*sd)
     } else if (method == "1lognorm") {
       educated_guess = c(mu, sd)
     }
   }
   
+  # get smallest upper bound and largest lower bound o avoid 0 and Inf
+  min_bracket_lwr = min(sapply(brackets, FUN = max))
+  max_bracket_upr = max(sapply(brackets, FUN = min))
   
   this_objective = function(prms) {
+    prms = as.numeric(prms)
+    if (any(!is.finite(prms)) || length(prms) == 0) return(1e10)
+   
+    
     if(method == "3lognorm"){
       params = list("w.2" = prms[1], "w.3" = prms[2], "mu.1" = prms[3],
                     "mu.2" = prms[4], "mu.3" = prms[5], "sd.1" = prms[6],
                     "sd.2" = prms[7], "sd.3" = prms[8])
-      # avoid weigths below 0.05
-      if (params$w.2 < 0.05 || params$w.3 < 0.05 || params$w.2 + params$w.3 > 0.95) return(1e10)
-      if (any(params[c("sd.1", "sd.2", "sd.3")] <= 1e-3)) return(1e10)
-      if (any(params[c("sd.1", "sd.2", "sd.3")] > 5)) return(1e10)
+      # restrict weights to be positive
+      if (params$w.2 < 0 || params$w.3 < 0 || params$w.2 + params$w.3 > 1) return(1e10)
+      # restrict sigma to be positive
+      if (any(params[c("sd.1", "sd.2", "sd.3")] <= 0)) return(1e10)
+      
+      # # treat weights below the threshold as 0
+      if(params$w.2-params$w.3 > 1-threshold){
+        rest = 1-params$w.2-params$w.3
+        params$w.2 = params$w.2 + rest/2
+        params$w.3 = params$w.3 + rest/2
+      }
+      if(params$w.2 < threshold) params$w.2 = 0
+      if(params$w.3 < threshold) params$w.3 = 0
+
+      
+
+      # make sure the median of any distribution is no less than half of the lowest bracket
+      # and no greater than twice the upper bound of highest bracket
+      # if (any(exp(as.numeric(params[c("mu.1", "mu.2", "mu.3")])) < 0.5*min_bracket_lwr)) return(1e10)
+      # if(any(exp(as.numeric(params[c("mu.1", "mu.2", "mu.3")])) > 2 *max_bracket_upr)) return(1e10)
+      # restrict sigma to be less than sqrt(2 log(3)) which is equivalent to 
+      # restricting the mean to be less than 3 * the median
+      # (use mean = exp(mu + sigma^2 /2) and median = exp(mu))
+      # this ensures that there are no nonsensical distributions fitted
+      # to the tails
+      # if (any(params[c("sd.1", "sd.2", "sd.3")] > sqrt(2*log(2)))) return(1e10)
+      
+      # penalize sigma values (division to match the observed scale of the objective)
+      # penalty shouldn't be very big but is necessary as sometimes there are unreasobaly large sigma
+      # sigma_penalty = exp(as.numeric(params[c("sd.1", "sd.2", "sd.3")]))/10000
+      
     } else if (method == "1lognorm") {
       params = list("mu" = prms[1], "sd" = prms[2])
-      if(params$sd < 1e-3) return(1e10)
+      if(params$sd < 0) return(1e10)
+      sigma_penalty = 0
     }
-    return(objective(params = params,
-              brackets = brackets,
-              probs = probs,
-              method = method))
+    obj = objective(params = params,
+                    brackets = brackets,
+                    probs = probs,
+                    method = method)
+    # ensure the objective is finite
+    return(ifelse(is.finite(obj), obj, 1e10))
     }
   
   # try 100 different starting values
@@ -134,13 +173,13 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
       initial_values[[i]] = educated_guess
     } else if(method == "3lognorm") {
     initial_values[[i]] = c(
-      runif(2, 0.05, 0.48), runif(3, 0, log(2*tail(sort(unlist(brackets)),2)[1])),
-      runif(3, 1e-3, 4)
+      runif(2, 0.05, 0.48), runif(3, log(0.5*min_bracket_lwr), log(2*max_bracket_upr)),
+      runif(3, sd/10, sd *10)
     )
     } else if(method == "1lognorm"){
       initial_values[[i]] = c(
         runif(1, 0, log(2*tail(sort(unlist(brackets)),2)[1])), 
-        runif(1, 1e-3, 4)
+        runif(1, sd/10, sd*10)
       )
     }
   }
@@ -149,7 +188,7 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
     tryCatch(
       optim(start, fn = this_objective, method = "Nelder-Mead",
             control = list(maxit = 200)),
-      error = function(e) list(value = 1e10)
+      error = function(e) list(value = 1e11)
     )
   })
   # for the best 5, optimize fully
@@ -162,8 +201,16 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
   best <- refined[[which.min(sapply(refined, function(r) r$value))]]
   
   if (method == "3lognorm"){
+    # # if a weight is below the threshold set it to 0
+    w.2 = ifelse(best$par[1] < threshold, 0, best$par[1])
+    w.3 = ifelse(best$par[2] < threshold, 0, best$par[2])
+    if(1-w.2-w.3 < threshold){
+      rest = 1-w.2-w.3
+      w.2 = w.2 + rest/2
+      w.3 = w.3 + rest/2
+    }
     
-    return(list("w.2" = best$par[1], "w.3" = best$par[2],
+    return(list("w.2" = w.2, "w.3" = w.3,
                 "mu.1" = best$par[3], "mu.2" = best$par[4],
                 "mu.3" = best$par[5], "sd.1" = best$par[6],
                 "sd.2" = best$par[7], "sd.3" = best$par[8]))
@@ -183,7 +230,7 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
 #     w2 = params$w.2
 #     w3 = params$w.3
 #     w1 = 1 - w2 - w3
-#     
+# 
 #     w1 * dlnorm(x, params$mu.1, params$sd.1) +
 #       w2 * dlnorm(x, params$mu.2, params$sd.2) +
 #       w3 * dlnorm(x, params$mu.3, params$sd.3)
@@ -192,43 +239,43 @@ fit_pm_density = function(method, data, educated_guess = NULL, x_range = NULL, d
 #   # plot it
 #   x = seq(x_min, x_max, length.out = 10000)
 #   y = mixture_density(x, params)
-#   
+# 
 #   density_df = data.frame(x = x, y = y)
-#   
+# 
 #   start_bracket = sapply(brackets, function(x) x[1])
 #   start_bracket[1] = start_bracket[1]-5
-#   poly_df = data.frame(start_bracket = start_bracket, poly_probs)
-#   
+#   # poly_df = data.frame(start_bracket = start_bracket, poly_probs = poly_probs/sum(poly_probs))
+# 
 #   plot = ggplot() +
 #     # mixture density line
 #     geom_line(data = density_df, aes(x = x, y = y), linewidth = 1.5) +
 #     # step plot from poly
-#     geom_step(data = poly_df, aes(x = start_bracket, y = poly_probs), 
-#               linewidth = 1.5, color = "red") +
+#     # geom_step(data = poly_df, aes(x = start_bracket, y = poly_probs),
+#               # linewidth = 1.5, color = "red") +
 #     labs(title = title,
 #          x = "Strike",
 #          y = "Density")
 #   print(plot)
 # }
-
+# 
 
 # library(readxl)
 # library(dplyr)
 # dte = 3
-# data_loc = "C:\\Users\\lars\\OneDrive\\Dokumente\\Uni\\Seminar Forecasting\\data collection\\Getting poly data\\"   
+# data_loc = "C:\\Users\\lars\\OneDrive\\Dokumente\\Uni\\Seminar Forecasting\\data collection\\Getting poly data\\"
 # aapl_3_27 = read_excel(paste0(data_loc, "aapl_weekly_market\\aapl-week-november-28-2025.xlsx"))
 # dte4 = aapl_3_27|> filter(DTE == dte)
 # brackets = sapply((strsplit(gsub( "<|>", "",dte4$bracket), "-")), function(x) as.numeric(x))
 # probs = dte4$price_yes
 # approx_interval = (range(brackets)[2]+5)- (range(brackets)[1] -5)
 # probs_2 = dte4$price_yes /(mean(probs) * approx_interval)
-# 
+#
 # mean(probs_2) * approx_interval
-# 
+#
 # params = fit_am_pm(aapl_3_27, 4)
-# 
+#
 # plot_log_mixture(params, poly_probs = probs_2, x_min = range(brackets)[1]*0.9, x_max = range(brackets)[2]*1.1, title = dte)
-# 
+#
 
 
 
