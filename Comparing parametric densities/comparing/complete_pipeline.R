@@ -105,7 +105,7 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
       }
       
       # calibrate and/or normalize the prices
-      cal = calibration_coeff[[cal_name]][[1]]
+      cal = calibration_coeff[[cal_name]]
       print(cal[dte])
       if(cal[dte] == 1){
         this_pm_data = filter(pm_data, DTE == dte)|>
@@ -143,6 +143,17 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
         
         next
       }
+      
+      # get probability results before a date might be skipped because pm density cannot be fit
+      # as we use the raw pm prices
+      probability[[cal_name]][[dte]] = get_both_probabilities(option_fit = option_density, 
+                                                              this_pm_data = this_pm_data,
+                                                              dte = dte,
+                                                              stock = stock,
+                                                              date = date,
+                                                              method = method
+      )
+      probability[[cal_name]][[dte]][["calibration_method"]] = cal_name
   
       attempt_pm = try({
         x_range = if (method == "nonparam") range(option_density$rnd_K) else NULL
@@ -175,15 +186,6 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
                                                  method = method
                                                  )
       density[[cal_name]][[dte]][["calibration_method"]] = cal_name
-      
-      probability[[cal_name]][[dte]] = get_both_probabilities(option_fit = option_density, 
-                                             this_pm_data = this_pm_data,
-                                             dte = dte,
-                                             stock = stock,
-                                             date = date,
-                                             method = method
-                                             )
-      probability[[cal_name]][[dte]][["calibration_method"]] = cal_name
     }
   }
   
@@ -231,7 +233,6 @@ get_comparison_density = function(option_density, pm_density, dte,
   moments = get_moments(method = method, 
                         option_density = option_density,
                         pm_density = pm_density,
-                        ci = ci,
                         y_options = y_options,
                         x_new = x_new,
                         dx = dx)
@@ -239,29 +240,39 @@ get_comparison_density = function(option_density, pm_density, dte,
 
     
   results = data.frame("Stock" = stock, 
-                        "Date" = date,
-                        "DTE" = dte,
+                       "Date" = date,
+                       "DTE" = dte,
                        "method" = method,
                        "Wasserstein Distance" = wasserstein,
-                        "Hellinger Distance" = hellinger,
-                        "KS statistic" = ks$ks_statistic,
-                        "KS p-value" = ks$p_val,
-                       "mean" = moments$mean,
-                       "mean_halfwidth" = moments$mean_halfwidth,
-                       "median" = moments$median,
-                       "median_halfwidth" = moments$median_halfwidth,
-                       "variance" = moments$variance,
-                       "variance_halfwidth" = moments$variance_halfwidth,
-                       "skewness" = moments$skewness,
-                       "skewness_halfwidth" = moments$skewness_halfwidth,
-                       "kurtosis" = moments$kurtosis,
-                       "kurtosis_halfwidth" = moments$kurtosis_halfwidth
+                       "Hellinger Distance" = hellinger,
+                       "KS statistic" = ks$ks_statistic,
+                       "KS p-value" = ks$p_val,
+                       "option_mean" = moments$option$mean,
+                       "option_mean_halfwidth" = moments$option$mean_halfwidth,
+                       "option_median" = moments$option$median,
+                       "option_median_halfwidth" = moments$option$median_halfwidth,
+                       "option_variance" = moments$option$variance,
+                       "option_variance_halfwidth" = moments$option$variance_halfwidth,
+                       "option_skewness" = moments$option$skewness,
+                       "option_skewness_halfwidth" = moments$option$skewness_halfwidth,
+                       "option_kurtosis" = moments$option$kurtosis,
+                       "option_kurtosis_halfwidth" = moments$option$kurtosis_halfwidth,
+                       "pm_mean" = moments$pm$mean,
+                       "pm_mean_halfwidth" = moments$pm$mean_halfwidth,
+                       "pm_median" = moments$pm$median,
+                       "pm_median_halfwidth" = moments$pm$median_halfwidth,
+                       "pm_variance" = moments$pm$variance,
+                       "pm_variance_halfwidth" = moments$pm$variance_halfwidth,
+                       "pm_skewness" = moments$pm$skewness,
+                       "pm_skewness_halfwidth" = moments$pm$skewness_halfwidth,
+                       "pm_kurtosis" = moments$pm$kurtosis,
+                       "pm_kurtosis_halfwidth" = moments$pm$kurtosis_halfwidth
   )
     
   
   return(results)
 }
-##################################################3
+##################################################
 
 get_both_probabilities = function(option_fit, this_pm_data, dte, stock, date, method){
   

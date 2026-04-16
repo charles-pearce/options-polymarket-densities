@@ -80,7 +80,7 @@ ks_test = function(y_options, x_new, pm_fit, dx, method, n = 10000){
     rnd_unif = runif(n)
     
     pm_cdf = cumsum(pm_fit$data$y)*dx
-    pm_rnd = approx(pm_cdf, x_new, xout = rnd_unif)$y
+    pm_rnd = approx(pm_cdf, x_new, xout = rnd_unif, rule = 2)$y
   }
     
   # get random sample from the option implied distribution
@@ -89,7 +89,7 @@ ks_test = function(y_options, x_new, pm_fit, dx, method, n = 10000){
   cdf = cumsum(y_options)*dx
   # draw form uniform and compute corresponding sample
   rnd_unif = runif(n)
-  opt_rnd = approx(cdf, x_new, xout = rnd_unif)$y
+  opt_rnd = approx(cdf, x_new, xout = rnd_unif, rule = 2)$y
   
   test = ks.test(pm_rnd, opt_rnd, alternative = "two.sided")
   return(list("ks_statistic" = test$statistic, p_val = test$p.value))
@@ -232,9 +232,11 @@ ks_test = function(y_options, x_new, pm_fit, dx, method, n = 10000){
 
 # get moments through bootstrapping
 
-get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
+get_moments = function(method, option_density, pm_density, n = 10000,
                        B = 100, y_options = NULL, dx = NULL, x_new = NULL){
   if (method == "3lognorm"){
+    require(DescTools)
+    
     mu.1 = pm_density$mu.1
     mu.2 = pm_density$mu.2
     mu.3 = pm_density$mu.3
@@ -250,6 +252,7 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
       sample(c(1,2,3), size = n*B, replace = TRUE, prob = c(w.1, w.2, w.3)),
       nrow = n
     )
+    
     all_rnd = matrix(0, nrow = n, ncol = B)
     mask1 = all_components == 1
     mask2 = all_components == 2
@@ -258,14 +261,15 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
     all_rnd[mask2] = rlnorm(sum(mask2), mu.2, sd.2)
     all_rnd[mask3] = rlnorm(sum(mask3), mu.3, sd.3)
     
+    # winsorize highest 5% of random draws for robustness
+    all_rnd = sapply(1:ncol(all_rnd), function(i) Winsorize(all_rnd[,i], val = quantile(all_rnd[,i], probs = c(0, 0.95))))
+    
     pm_moments = get_all_moments(all_rnd)
-    
-    
     
     cdf = cumsum(y_options) * dx
     all_unif = runif(n * B)
     all_rnd_opt = matrix(
-      approx(cdf, x_new, xout = all_unif)$y,
+      approx(cdf, x_new, xout = all_unif, rule = 2)$y,
       nrow = n
     )
     
@@ -279,7 +283,7 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
     cdf = cumsum(y_options) * dx
     all_unif = runif(n * B)
     all_rnd_opt = matrix(
-      approx(cdf, x_new, xout = all_unif)$y,
+      approx(cdf, x_new, xout = all_unif, rule = 2)$y,
       nrow = n
     )
     option_moments = get_all_moments(all_rnd_opt)
@@ -289,7 +293,7 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
     cdf = cumsum(option_density$rnd) * dx
     all_unif = runif(n * B)
     all_rnd = matrix(
-      approx(cdf, x_new, xout = all_unif)$y,
+      approx(cdf, x_new, xout = all_unif, rule = 2)$y,
       nrow = n
     )
     option_moments = get_all_moments(all_rnd)
@@ -298,14 +302,14 @@ get_moments = function(method, option_density, pm_density, ci = TRUE, n = 10000,
     cdf = cumsum(pm_density$data$y) * dx
     all_unif = runif(n * B)
     all_rnd = matrix(
-      approx(cdf, x_new, xout = all_unif)$y,
+      approx(cdf, x_new, xout = all_unif, rule = 2)$y,
       nrow = n
     )
     
     pm_moments = get_all_moments(all_rnd)
   }
   
-  return(c(pm_moments, option_moments))
+  return(list(pm = pm_moments, option = option_moments))
 }
 # compute the variance of a lognormal
 lognorm_var = function(mu, sd){
@@ -314,7 +318,6 @@ lognorm_var = function(mu, sd){
 
 get_all_moments = function(mat) {
   require(matrixStats)
-  n = ncol(mat)
   mu = colMeans(mat, na.rm = TRUE)
   
   centered = sweep(mat, 2, mu, FUN = "-")

@@ -61,13 +61,13 @@ brier_loss = function(probs, outcomes){
 }
 
 log_loss = function(probs, outcomes){
-  result = outcomes * log10(probs) + (1-outcomes) * log10(1-probs)
-  nas = which(is.na(result))
-  result[nas] = .Machine$double.eps 
-  return(result)
+  eps = .Machine$double.eps 
+  probs = pmin(pmax(eps, probs), 1-eps)
+  result = outcomes * log(probs) + (1-outcomes) * log(1-probs)
+  return(-result)
 }
 
-compare_accuracy_by_dte = function(df, dte_range = 1:4){
+compare_accuracy_by_dte = function(df, dte_range = unique(df$DTE)){
   require(forecast)
   results = list()
   for(dte in dte_range){
