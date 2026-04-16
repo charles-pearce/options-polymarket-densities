@@ -95,7 +95,7 @@ extract_shimko <- function(data,
   
   # spline guard
   if (length(unique(df$K)) < 4) {
-    warning(sprintf("Skipping tau = %.4f — only %d unique strike(s) after filtering.",
+    stop(sprintf("Skipping tau = %.4f — only %d unique strike(s) after filtering.",
                     tau, length(unique(df$K))))
     return(NULL)
   }
@@ -131,7 +131,7 @@ extract_shimko <- function(data,
   rnd   <- rnd / sum(rnd * dK)
   
   if (!all(rnd >= 0)) {
-    cat("Warning: the RND contains negative values\n")
+    stop("Warning: the RND contains negative values\n")
   }
   
   return(list(
