@@ -82,11 +82,6 @@ extract_shimko <- function(data,
   
   df$sigma_iv <- mapply(iv, df$K, df$price, df$type)
   
-  
-  df <- df %>%
-    filter(!is.na(sigma_iv), sigma_iv > 0.1, sigma_iv < 1.5)
-  
-  
   # strike aggregation
   df <- df %>%
     group_by(K) %>%
@@ -94,7 +89,7 @@ extract_shimko <- function(data,
     arrange(K)
   
   # spline guard
-  if (length(unique(df$K)) < 4) {
+  if (length(unique(df$K)) < 5) {
     stop(sprintf("Skipping tau = %.4f — only %d unique strike(s) after filtering.",
                     tau, length(unique(df$K))))
     return(NULL)
