@@ -2,9 +2,8 @@
 extract_shimko <- function(data,
                            dx = 0.1, #number of points on the density function to return
                            q = 0,  #div yield
-                           spar = 0.9,  #smoothing param, use > 0.8
-                           moneyness_filter = 0.45, #filter for deep contracts 
-                           callsOnly = FALSE) {
+                           spar = 0.9, #smoothing parameter
+                           arbirtageBound = TRUE) {
   
   S = unique(data$SpotClose)
   r = unique(data$Rate)
@@ -26,24 +25,17 @@ extract_shimko <- function(data,
   
   #use OTM options, following Shimko (1993)
   
-  if(callsOnly){
-    df$type <- toupper(data$OptionType)
-    df <- df %>% filter(type == "CALL", price > 0)
-    
-  } else {
+  
     df$type <- toupper(data$OptionType)
     df_calls <- df %>% filter(type == "CALL", K >= S)
     df_puts  <- df %>% filter(type == "PUT",  K < S)
     df <- bind_rows(df_calls, df_puts) %>%
       filter(price > 0)
-  }
-  # moneyness filtration
-  df <- df %>%
-    filter(abs(K - S) / S < moneyness_filter)
   
   
   # arbitrage bounds
-  lower_bound <- ifelse(
+  if(arbirtageBound) {
+    lower_bound <- ifelse(
     df$type == "CALL",
     pmax(S * exp(-q * tau) - df$K * exp(-r * tau), 0),
     pmax(df$K * exp(-r * tau) - S * exp(-q * tau), 0)
@@ -55,7 +47,8 @@ extract_shimko <- function(data,
   )
   df <- df %>%
     filter(price >= lower_bound, price <= upper_bound)
-  
+  }
+    
   # implied vol
   iv <- function(K, price, type) {
     tryCatch({
@@ -91,7 +84,7 @@ extract_shimko <- function(data,
   # spline guard
   if (length(unique(df$K)) < 5) {
     stop(sprintf("Skipping tau = %.4f — only %d unique strike(s) after filtering.",
-                    tau, length(unique(df$K))))
+                 tau, length(unique(df$K))))
     return(NULL)
   }
   
@@ -128,16 +121,20 @@ extract_shimko <- function(data,
   if (!all(rnd >= 0)) {
     stop("Warning: the RND contains negative values\n")
   }
-  
+  area <- sum(rnd * dK)
+  if (abs(area - 1) > 1e-4) {
+    warning(sprintf("RND does not integrate to 1 (area = %.6f)", area))
+  }
   return(list(
-              rnd_K      = K_mid,
-              rnd        = rnd,
-              cdf = approxfun(x = K_mid, 
-                              y = cumsum(rnd) * dx, 
-                              yleft = 0, 
-                              yright = 1),
-              area       = sum(rnd * dK)
-              )
+    rnd_K      = K_mid,
+    rnd        = rnd,
+    cdf = approxfun(x = K_mid, 
+                    y = cumsum(rnd) * dx, 
+                    yleft = 0, 
+                    yright = 1),
+    area       = area
+  )
   )
 }
-
+  
+ 
