@@ -8,6 +8,7 @@ get_results = function(data_loc, method, calibration_coeff = list("COMBINED" =c(
   require(purrr)
   require(dplyr)
   require(doSNOW)
+  require(doRNG)
   
   cl <- makeCluster(nclusters)
 
@@ -37,11 +38,11 @@ get_results = function(data_loc, method, calibration_coeff = list("COMBINED" =c(
     library(dplyr)
   })
   
-  
+  set.seed(6969)
   result = foreach(name = files,
                    .export = c("combined_results", "get_comparison_density",
                                "get_both_probabilities"),
-                    .options.snow = opts) %dopar%
+                    .options.snow = opts) %dorng%
     tryCatch(
             combined_results(name, data_loc, method, calibration_coeff),
             error = function(e) list(error = conditionMessage(e), file = name)
@@ -51,10 +52,12 @@ get_results = function(data_loc, method, calibration_coeff = list("COMBINED" =c(
   rownames(density_df) = NULL
   probability_df = bind_rows(map(result, "probability"))
   skipped = bind_rows(map(result, "skipped"))
+  num_skipped_strikes = mean(unlist((map(result, "skipped_option_strikes"))))
 
   return(list("density_comparison" = density_df,
               "probabilities" = probability_df,
-              "skipped" = skipped))
+              "skipped" = skipped,
+              "num_skipped_strikes" = num_skipped_strikes))
 }
 
 # get the results (density and probability comparisons) for a specific 
@@ -99,7 +102,8 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
           "date" = date, 
           "dte" = dte, 
           "calibration_level" = cal_name,
-          "reason" = "sum price > 2"
+          "reason" = "sum price > 2",
+          "error" = "sum price > 2"
           )
         next
       }
@@ -124,6 +128,7 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
           mutate(probs = probs/sum(probs))
       }
       
+
       attempt_option = try({
         option_density = get_option_density(data = option_data,
                                             dte = dte,
@@ -138,7 +143,8 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
           "date" = date, 
           "dte" = dte,
           "calibration_level" = cal_name,
-          "reason" = "option density not found" 
+          "reason" = "option density not found",
+          "error" = attempt_option[1]
         )
         
         next
@@ -154,7 +160,8 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
                                                               method = method
       )
       probability[[cal_name]][[dte]][["calibration_method"]] = cal_name
-  
+      
+      
       attempt_pm = try({
         x_range = if (method == "nonparam") range(option_density$rnd_K) else NULL
         pm_density = fit_pm_density(method = method, 
@@ -170,7 +177,8 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
           "date" = date, 
           "dte" = dte,
           "calibration_level" = cal_name,
-          "reason" = "pm density not found"
+          "reason" = "pm density not found",
+          "error" = attempt_pm[1]
           )
         
         next
@@ -192,7 +200,9 @@ combined_results = function(name, data_loc, method, calibration_coeff, dx = 0.1)
   # have to call rbind twice as we now have a nested list 
   return(list(density = do.call(rbind, lapply(density, function(x) do.call(rbind, x))),
               probability = do.call(rbind, lapply(probability, function(x) do.call(rbind, x))),
-              skipped = bind_rows(skipped_list)))
+              skipped = bind_rows(skipped_list),
+              skipped_option_strikes = option_density$num_na)
+         )
 }
 ###########################################
 get_comparison_density = function(option_density, pm_density, dte, 

@@ -17,7 +17,8 @@ names(calibration_coeff) = toupper(names(calibration_coeff))
 calibration_coeff$"COMBINED" = coefs_combined$logit_prices
 calibration_coeff$"NOT CALIBRATED" = c(1,1,1,1)
 
-for(method in c("3lognorm", "nonparam", "1lognorm")){
+
+for(method in c( "nonparam", "3lognorm","1lognorm")){
   
   results = get_results(data_loc = data_loc,
                         nclusters = 8, 
@@ -74,7 +75,7 @@ for(method in c("3lognorm", "nonparam", "1lognorm")){
   mz_result = rbind(mz_results_by_DTE, mz_result_by_DTE_stock)
   
   # save results
-  folder_name = paste("results\\", method)
+  folder_name = paste0("results\\", method)
   dir.create(folder_name)
   
   write.csv(density_result, paste0(folder_name,"\\", method,"_", "density_result.csv"), row.names = FALSE)
